@@ -1,0 +1,2082 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<link rel="icon" href="favicon.png">
+<link rel="apple-touch-icon" href="favicon.png">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Control de Ventas — Alumexpress</title>
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Alumexpress Ventas">
+<meta name="theme-color" content="#0F5C5C">
+<link rel="manifest" id="pwa-manifest">
+<script src="fbconfig.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // firebaseConfig viene de fbconfig.js (proyecto alumexpress-ventas)
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const ventasCol = collection(db, 'ventas');
+
+  // Escuchar cambios en tiempo real
+  onSnapshot(ventasCol, (snapshot) => {
+    ventas = [];
+    snapshot.forEach(d => ventas.push({ ...d.data(), id: d.id }));
+    // Ordenar por fecha localmente
+    ventas.sort((a,b) => (b.fechaCompra||'').localeCompare(a.fechaCompra||''));
+    renderAll();
+    renderPendienteBadge();
+  });
+
+  // Exponer funciones de Firebase globalmente
+  window.fbSave = async (v, isNew) => {
+    try {
+      if (isNew) {
+        await setDoc(doc(db, 'ventas', v.id), v);
+      } else {
+        await setDoc(doc(db, 'ventas', v.id), v);
+      }
+      return true;
+    } catch(e) { console.error(e); return false; }
+  };
+
+  // Pagos compartidos entre todos los dispositivos (colección 'pagos')
+  const pagosCol = collection(db, 'pagos');
+  onSnapshot(pagosCol, (snapshot) => {
+    pagos = [];
+    snapshot.forEach(d => pagos.push({ ...d.data(), id: d.id }));
+    pagos.sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'') || (b.id||'').localeCompare(a.id||''));
+    localStorage.setItem('alumexpress_pagos', JSON.stringify(pagos));
+    const tp = document.getElementById('tab-pagos');
+    if (tp && tp.style.display !== 'none') renderPagos();
+  });
+
+  window.fbSavePago = async (p) => {
+    try { await setDoc(doc(db, 'pagos', p.id), p); return true; }
+    catch(e) { console.error(e); return false; }
+  };
+
+  window.fbDelete = async (id) => {
+    try {
+      await deleteDoc(doc(db, 'ventas', id));
+      return true;
+    } catch(e) { console.error(e); return false; }
+  };
+
+  // Contador consecutivo en Firebase
+  const { runTransaction } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+  
+  window.getNextNumero = async (tipo) => {
+    const ref = doc(db, 'contadores', tipo);
+    try {
+      const siguiente = await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(ref);
+        const actual = snap.exists() ? snap.data().valor : 0;
+        const next = actual + 1;
+        transaction.set(ref, { valor: next });
+        return next;
+      });
+      return siguiente;
+    } catch(e) { 
+      console.error('Counter error:', e);
+      return 1 + Math.floor(Math.random() * 100);
+    }
+  };
+</script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #f4f6f9;
+    --surface: #ffffff;
+    --surface2: #eef1f5;
+    --border: #dde1e8;
+    --accent: #2563eb;
+    --accent2: #1d4ed8;
+    --text: #1e293b;
+    --muted: #64748b;
+    --success: #16a34a;
+    --danger: #dc2626;
+    --warning: #d97706;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 14px;
+  }
+
+  /* HEADER */
+  .header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .logo {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: .5px;
+    color: var(--accent);
+  }
+  .logo span { color: var(--muted); font-weight: 400; }
+  .header-actions { display: flex; gap: 10px; }
+
+  /* TABS */
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    padding: 0 24px;
+    gap: 4px;
+  }
+  .tab {
+    padding: 12px 18px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    transition: all .2s;
+    background: none;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    font-family: inherit;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* MAIN */
+  .main { padding: 24px; max-width: 1300px; margin: 0 auto; }
+
+  /* STATS */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 6px; }
+  .stat-value { font-size: 22px; font-weight: 600; font-family: 'DM Mono', monospace; }
+  .stat-value.green { color: var(--success); }
+  .stat-value.yellow { color: var(--accent); }
+  .stat-value.blue { color: var(--accent2); }
+  .stat-value.red { color: var(--danger); }
+
+  /* FILTERS */
+  .filters {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .filter-btn {
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all .2s;
+  }
+  .filter-btn:hover, .filter-btn.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .search-input {
+    margin-left: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 14px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    width: 220px;
+    outline: none;
+  }
+  .search-input:focus { border-color: var(--accent2); }
+  .search-input::placeholder { color: var(--muted); }
+
+  /* TABLE */
+  .table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    padding: 11px 14px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .7px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background .15s;
+    cursor: pointer;
+  }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--surface2); }
+  tbody td {
+    padding: 11px 14px;
+    font-size: 13px;
+    vertical-align: middle;
+  }
+  .td-mono { font-family: 'DM Mono', monospace; font-size: 12px; }
+
+  /* BADGES */
+  .badge {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .badge-pagado { background: rgba(76,175,125,.15); color: var(--success); }
+  .badge-pendiente { background: rgba(232,155,71,.15); color: var(--warning); }
+  .badge-parcial { background: rgba(91,142,240,.15); color: var(--accent2); }
+  .badge-entregado { background: rgba(76,175,125,.15); color: var(--success); }
+  .badge-no-entregado { background: rgba(224,92,92,.15); color: var(--danger); }
+  .badge-en-proceso { background: rgba(232,197,71,.15); color: var(--accent); }
+
+  .canal-dot {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+  }
+  .canal-dot::before {
+    content: '';
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    display: inline-block;
+    opacity: .8;
+  }
+  .canal-ml { color: #b45309; }
+  .canal-tn { color: var(--accent2); }
+  .canal-wp { color: var(--success); }
+  .canal-sh { color: #c084fc; }
+  .canal-co { color: #fb923c; }
+
+  /* MODAL */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.7);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 200;
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    width: 620px;
+    max-width: 95vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 28px;
+    transform: translateY(20px);
+    transition: transform .2s;
+  }
+  .modal-overlay.open .modal { transform: translateY(0); }
+  .modal-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .close-btn {
+    background: none; border: none;
+    color: var(--muted); font-size: 20px;
+    cursor: pointer; line-height: 1;
+    padding: 4px;
+  }
+  .close-btn:hover { color: var(--text); }
+
+  /* FORM */
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .form-grid .full { grid-column: 1 / -1; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .7px; }
+  .field input, .field select, .field textarea {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 12px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent2); }
+  .field select option { background: var(--surface2); }
+  .field textarea { resize: vertical; min-height: 70px; }
+
+  .section-sep {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* BUTTONS */
+  .btn {
+    padding: 9px 18px;
+    border-radius: 8px;
+    border: none;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .2s;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+  .btn-danger { background: rgba(224,92,92,.15); color: var(--danger); border: 1px solid rgba(224,92,92,.3); }
+  .btn-danger:hover { background: rgba(224,92,92,.25); }
+  .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }
+
+  .btn-add {
+    padding: 8px 16px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .btn-add:hover { background: var(--accent2); }
+
+  /* EMPTY STATE */
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--muted);
+  }
+  .empty-icon { font-size: 40px; margin-bottom: 12px; }
+  .empty p { font-size: 14px; }
+
+  /* DETAIL VIEW */
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .detail-item label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: var(--muted);
+    font-weight: 600;
+    display: block;
+    margin-bottom: 3px;
+  }
+  .detail-item .val {
+    font-size: 14px;
+    color: var(--text);
+  }
+  .detail-item.full { grid-column: 1/-1; }
+  .nota-box {
+    background: var(--surface2);
+    border-left: 3px solid var(--accent);
+    padding: 10px 14px;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* EXPORT BUTTON */
+  .btn-export {
+    padding: 7px 14px;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .btn-export:hover { color: var(--text); border-color: var(--muted); }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .remito-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 400;
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s;
+  }
+  .remito-overlay.open { opacity: 1; pointer-events: all; }
+  .remito-sheet {
+    background: #fff;
+    color: #111;
+    width: 700px;
+    max-width: 96vw;
+    max-height: 92vh;
+    overflow-y: auto;
+    border-radius: 6px;
+    padding: 48px 52px;
+    font-family: Arial, sans-serif;
+    font-size: 13px;
+  }
+  .remito-actions {
+    display: flex; gap: 10px; justify-content: flex-end;
+    margin-top: 28px;
+  }
+  @media print {
+    body > * { display: none !important; }
+    .remito-overlay { display: flex !important; opacity: 1 !important; pointer-events: all !important; background: #fff !important; }
+    .remito-sheet { box-shadow: none !important; max-height: none !important; }
+    .remito-actions { display: none !important; }
+  }
+  @media (max-width: 700px) {
+    .form-grid { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: 1fr 1fr; }
+    .detail-grid { grid-template-columns: 1fr; }
+    .main { padding: 14px; }
+    table { font-size: 12px; }
+    thead th, tbody td { padding: 9px 10px; }
+    .col-hide { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">ALUMEXPRESS <span>/ Ventas</span></div>
+  <div class="header-actions">
+    <span id="sync-indicator" style="font-size:12px;margin-right:8px"></span>
+    <button id="btn-sync-pendientes" onclick="syncPendientes()" style="display:none;padding:7px 14px;border-radius:8px;background:rgba(232,155,71,.15);color:var(--warning);border:1px solid rgba(232,155,71,.4);font-family:inherit;font-size:12px;cursor:pointer;align-items:center;gap:6px;">
+      ↑ Subir pendientes <span id="badge-pendientes" style="background:var(--warning);color:#000;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:600"></span>
+    </button>
+    <button class="btn-export" onclick="exportCSV()">
+      ↓ Exportar CSV
+    </button>
+    <button class="btn-add" onclick="openModal()">
+      + Nueva venta
+    </button>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="setTab('ventas',this)">Ventas</button>
+  <button class="tab" onclick="setTab('presupuestos',this)">Presupuestos</button>
+  <button class="tab" onclick="setTab('dashboard',this)">Dashboard</button>
+  <button class="tab" onclick="setTab('pagos',this)">Pagos</button>
+</div>
+
+<div class="main">
+
+  <!-- STATS -->
+  <div class="stats" id="stats"></div>
+
+  <!-- TAB: VENTAS -->
+  <div id="tab-ventas">
+    <div class="filters">
+      <button class="filter-btn active" onclick="setFilter('todos',this)">Todos</button>
+      <button class="filter-btn" onclick="setFilter('pagado',this)">Pagados</button>
+      <button class="filter-btn" onclick="setFilter('pendiente',this)">Pago pendiente</button>
+      <button class="filter-btn" onclick="setFilter('no-entregado',this)">Sin entregar</button>
+      <button class="filter-btn" onclick="setFilter('entregado',this)">Entregados</button>
+      <input class="search-input" placeholder="Buscar cliente, producto..." oninput="renderTable()" id="search">
+    </div>
+    <div class="filters" style="margin-top:-8px; margin-bottom:18px;">
+      <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;font-weight:600">Período:</span>
+      <button class="filter-btn active" onclick="setPeriodo('todo',this)">Todo</button>
+      <button class="filter-btn" onclick="setPeriodo('hoy',this)">Hoy</button>
+      <button class="filter-btn" onclick="setPeriodo('semana',this)">Esta semana</button>
+      <button class="filter-btn" onclick="setPeriodo('mes',this)">Este mes</button>
+      <button class="filter-btn" onclick="setPeriodo('anio',this)">Este año</button>
+      <input type="month" id="filter-mes-custom" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:5px 10px;color:var(--text);font-family:inherit;font-size:12px;outline:none;margin-left:4px;" onchange="setPeriodoCustom(this.value)" title="Elegir mes específico">
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Cliente</th>
+            <th class="col-hide">Producto</th>
+            <th class="col-hide">Canal</th>
+            <th>Monto</th>
+            <th class="col-hide">Fecha compra</th>
+            <th>Entrega</th>
+            <th>Pago</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div id="empty-state" class="empty" style="display:none">
+        <div class="empty-icon">📋</div>
+        <p>No hay ventas registradas todavía</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: PRESUPUESTOS WEB -->
+  <div id="tab-presupuestos" style="display:none">
+    <!-- sub-tabs presupuestos -->
+    <div style="display:flex; gap:8px; margin-bottom:20px; border-bottom:2px solid var(--border); padding-bottom:0;">
+      <button id="pres-subtab-web-btn" style="display:none" onclick="showPresSubtab('web')"
+        style="background:none; border:none; padding:10px 18px; font-size:13px; font-weight:700; cursor:pointer; border-bottom:3px solid var(--accent2); margin-bottom:-2px; color:var(--accent2);">
+        Online
+      </button>
+      <button id="pres-subtab-interno-btn" onclick="showPresSubtab('interno')"
+        style="background:none; border:none; padding:10px 18px; font-size:13px; font-weight:700; cursor:pointer; border-bottom:3px solid transparent; margin-bottom:-2px; color:var(--muted);">
+        Interno
+      </button>
+    </div>
+
+    <!-- sub-tab: online -->
+    <div id="pres-subtab-web">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <div style="font-size:11px; color:var(--muted);">Hacé clic en "Convertir" para pasarlo a venta</div>
+        <button class="btn btn-secondary" onclick="loadPresupuestos()" style="font-size:11px; padding:8px 14px;">⟳ Actualizar</button>
+      </div>
+      <div id="pres-loading" style="display:none; text-align:center; padding:32px; color:var(--muted); font-size:13px;">Cargando presupuestos...</div>
+      <div id="pres-list"></div>
+    </div>
+
+    <!-- sub-tab: interno -->
+    <div id="pres-subtab-interno" style="display:none">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <div style="font-size:11px; color:var(--muted);">Hacé clic en "Convertir" para pasarlo a venta</div>
+        <button class="btn btn-secondary" onclick="loadPresupuestosInterno()" style="font-size:11px; padding:8px 14px;">⟳ Actualizar</button>
+      </div>
+      <div id="pres-interno-loading" style="display:none; text-align:center; padding:32px; color:var(--muted); font-size:13px;">Cargando presupuestos internos...</div>
+      <div id="pres-interno-list"></div>
+    </div>
+  </div>
+
+  <!-- TAB: DASHBOARD -->
+  <div id="tab-dashboard" style="display:none">
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:8px;">
+      <div class="table-wrap" style="padding:20px;">
+        <div style="font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.8px; margin-bottom:14px;">Ventas por canal</div>
+        <div id="chart-canal"></div>
+      </div>
+      <div class="table-wrap" style="padding:20px;">
+        <div style="font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.8px; margin-bottom:14px;">Estado de cobros</div>
+        <div id="chart-pago"></div>
+      </div>
+      <div class="table-wrap" style="padding:20px; grid-column:1/-1;">
+        <div style="font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.8px; margin-bottom:14px;">Últimas ventas</div>
+        <div id="chart-recientes"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: PAGOS -->
+  <div id="tab-pagos" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="filter-btn active" id="fpago-todos" onclick="filtrarPagos('todos',this)">Todos</button>
+        <button class="filter-btn" onclick="filtrarPagos('proveedor',this)">Proveedores</button>
+        <button class="filter-btn" onclick="filtrarPagos('sueldo',this)">Sueldos</button>
+        <button class="filter-btn" onclick="filtrarPagos('gasto',this)">Gastos fijos</button>
+      </div>
+      <button class="btn-add" onclick="openModalPago()">+ Nuevo pago</button>
+    </div>
+
+    <div class="stats" id="stats-pagos"></div>
+
+    <div class="table-wrap" style="margin-top:16px;">
+      <table>
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Tipo</th>
+            <th>A quién</th>
+            <th>Concepto</th>
+            <th>Monto</th>
+            <th>Factura</th>
+            <th>Forma de pago</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="tabla-pagos"></tbody>
+      </table>
+      <div id="pagos-empty" style="text-align:center;padding:40px;color:var(--muted);display:none">Sin pagos registrados</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- MODAL PAGOS -->
+<div class="modal-overlay" id="modal-pago">
+  <div class="modal">
+    <div class="modal-title">
+      <span>Nuevo pago</span>
+      <button class="close-btn" onclick="closeModalPago()">×</button>
+    </div>
+    <div class="form-grid">
+      <div class="field">
+        <label>Fecha</label>
+        <input id="fp-fecha" type="date">
+      </div>
+      <div class="field">
+        <label>Tipo</label>
+        <select id="fp-tipo" onchange="updateQuienSel()">
+          <option value="proveedor">Proveedor</option>
+          <option value="sueldo">Sueldo</option>
+          <option value="gasto">Gasto fijo</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>A quién / Nombre</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <select id="fp-quien-sel" style="flex:1" onchange="onQuienSelChange()"></select>
+          <button type="button" onclick="agregarQuien()" title="Agregar a la lista" style="padding:6px 11px;border-radius:6px;background:var(--panel2);border:1px solid var(--border);cursor:pointer;font-size:16px;line-height:1;color:var(--text)">+</button>
+        </div>
+        <input id="fp-quien-custom" type="text" placeholder="Escribir nombre..." style="display:none;margin-top:6px">
+      </div>
+      <div class="field">
+        <label>Concepto</label>
+        <input id="fp-concepto" type="text" placeholder="Ej: Compra perfiles, Sueldo octubre...">
+      </div>
+      <div class="field">
+        <label>Monto ($)</label>
+        <input id="fp-monto" type="number" placeholder="0">
+      </div>
+      <div class="field">
+        <label>Facturación</label>
+        <select id="fp-factura">
+          <option value="sin-factura">Sin factura</option>
+          <option value="factura-a">Factura A</option>
+          <option value="factura-b">Factura B</option>
+          <option value="factura-c">Factura C</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Forma de pago</label>
+        <select id="fp-forma-pago">
+          <option>Efectivo</option>
+          <option>Transferencia</option>
+          <option>Cheque</option>
+          <option>Tarjeta débito</option>
+          <option>Tarjeta crédito</option>
+          <option>Cuenta corriente</option>
+        </select>
+      </div>
+      <div class="field" style="grid-column:1/-1">
+        <label>Notas</label>
+        <textarea id="fp-notas" rows="2" placeholder="Notas adicionales..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn ghost" onclick="closeModalPago()">Cancelar</button>
+      <button class="btn btn-primary" onclick="savePago()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL NUEVA VENTA / EDITAR -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-title">
+      <span id="modal-title-text">Nueva venta</span>
+      <button class="close-btn" onclick="closeModal()">×</button>
+    </div>
+    <div class="form-grid">
+      <div class="section-sep">Negocio y cliente</div>
+
+      <div class="field">
+        <label>Negocio</label>
+        <select id="f-negocio">
+          <option>Alumexpress</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Vendedor</label>
+        <select id="f-vendedor">
+          <option>Milagros</option>
+          <option>Matías</option>
+          <option>Walter</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Canal de venta</label>
+        <select id="f-canal">
+          <option>WhatsApp / Directo</option>
+          <option>MercadoLibre</option>
+          <option>Tienda Nube</option>
+          <option>Showroom / Local</option>
+          <option>Constructoras</option>
+          <option>Cotizador Interno</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Nombre cliente</label>
+        <input id="f-cliente" placeholder="Ej: Juan Pérez">
+      </div>
+      <div class="field">
+        <label>Contacto (tel / mail)</label>
+        <input id="f-contacto" placeholder="Ej: 11 5555-1234">
+      </div>
+      <div class="field">
+        <label>Modalidad de entrega</label>
+        <select id="f-modalidad">
+          <option>Envío a domicilio</option>
+          <option>Retiro en local</option>
+        </select>
+      </div>
+      <div class="field full">
+        <label>Dirección de entrega</label>
+        <input id="f-direccion" placeholder="Ej: Av. San Martín 1234">
+      </div>
+      <div class="field">
+        <label>Localidad</label>
+        <input id="f-localidad" placeholder="Ej: Pilar, GBA Norte">
+      </div>
+
+      <div class="section-sep">Producto y venta</div>
+
+      <div class="field full">
+        <label>Producto / descripción</label>
+        <input id="f-producto" placeholder="Ej: Ventana Módena 120x100 DVH blanco">
+      </div>
+
+      <div class="field full">
+        <label>Aberturas <span style="font-weight:400;color:var(--muted);font-size:12px">(opcional — para calcular cortes y vidrios en obra)</span></label>
+        <div id="items-list" style="margin-bottom:6px"></div>
+        <button type="button" class="ghost" id="btn-add-item" onclick="toggleAddItem()" style="font-size:13px;width:100%">+ Agregar abertura</button>
+        <div id="add-item-form" style="display:none;margin-top:10px;background:var(--panel2);border-radius:10px;padding:14px;border:1px solid var(--border)">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Línea</label>
+              <select id="ni-linea" style="width:100%"><option value="modena">Módena</option><option value="a30">A30</option></select></div>
+            <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Color</label>
+              <select id="ni-color" style="width:100%"><option value="blanco">Blanco</option><option value="negro">Negro</option><option value="anodizado">Anodizado</option></select></div>
+            <div style="grid-column:1/-1"><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Tipo</label>
+              <select id="ni-tipo" style="width:100%">
+                <option value="corrediza">Corrediza 2 hojas</option>
+                <option value="corrediza3">Corrediza 3 hojas</option>
+                <option value="oscilobatiente">Abrir / Oscilobatiente</option>
+                <option value="banderola">Banderola</option>
+                <option value="brazo">Proyectante (brazo)</option>
+                <option value="pano">Paño fijo</option>
+              </select></div>
+            <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Ancho (mm)</label>
+              <input id="ni-ancho" type="number" placeholder="ej: 1200" style="width:100%"></div>
+            <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Alto (mm)</label>
+              <input id="ni-alto" type="number" placeholder="ej: 1000" style="width:100%"></div>
+            <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Vidrio</label>
+              <select id="ni-vidrio" style="width:100%"><option value="dvh">DVH</option><option value="laminado">Laminado 4+4mm</option><option value="v4">Simple V4mm</option></select></div>
+            <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Cantidad</label>
+              <input id="ni-cant" type="number" value="1" min="1" style="width:100%"></div>
+          </div>
+          <div style="margin-top:10px">
+            <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:6px">Opcionales</label>
+            <div style="display:flex;gap:16px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:14px"><input type="checkbox" id="ni-premarco" checked> Premarco</label>
+              <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:14px"><input type="checkbox" id="ni-contramarco" checked> Contramarco</label>
+              <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:14px"><input type="checkbox" id="ni-mosquitero"> Mosquitero</label>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button type="button" class="primary" onclick="addItemToList()" style="flex:1">Agregar</button>
+            <button type="button" class="ghost" onclick="cancelAddItem()">Cancelar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Monto total ($)</label>
+        <input id="f-monto" type="number" placeholder="0" oninput="calcEstadoPago()">
+      </div>
+      <div class="field">
+        <label>Seña / anticipo ($)</label>
+        <input id="f-sena" type="number" placeholder="0" oninput="calcEstadoPago()">
+      </div>
+      <div class="field">
+        <label>Forma de pago</label>
+        <select id="f-forma-pago">
+          <option>Efectivo</option>
+          <option>Transferencia</option>
+          <option>3 cuotas</option>
+          <option>3 cuotas Galicia (promo)</option>
+          <option>6 cuotas</option>
+          <option>12 cuotas</option>
+          <option>MercadoPago</option>
+          <option>Cheque</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Estado de pago</label>
+        <select id="f-estado-pago">
+          <option>Pendiente</option>
+          <option>Parcial</option>
+          <option>Pagado</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Facturación</label>
+        <select id="f-facturacion">
+          <option value="sin-factura">Sin factura</option>
+          <option value="aluwal-a">Aluwal — Factura A</option>
+          <option value="aluwal-b">Aluwal — Factura B</option>
+          <option value="aluwal-c">Aluwal — Factura C</option>
+          <option value="arquimep-a">Arquimep — Factura A</option>
+          <option value="arquimep-b">Arquimep — Factura B</option>
+          <option value="arquimep-c">Arquimep — Factura C</option>
+          <option value="personal-a">Personal — Factura A</option>
+          <option value="personal-b">Personal — Factura B</option>
+          <option value="personal-c">Personal — Factura C</option>
+        </select>
+      </div>
+
+      <div class="section-sep">Fechas y entrega</div>
+
+      <div class="field">
+        <label>Fecha de compra</label>
+        <input id="f-fecha-compra" type="date">
+      </div>
+      <div class="field">
+        <label>Entrega estimada</label>
+        <input id="f-fecha-entrega-est" type="date">
+      </div>
+      <div class="field" id="field-entrega-real" style="display:none">
+        <label>Entrega real</label>
+        <input id="f-fecha-entrega-real" type="date">
+      </div>
+      <div class="field">
+        <label>Estado de entrega</label>
+        <select id="f-estado-entrega">
+          <option>No entregado</option>
+          <option>En proceso</option>
+          <option>Entregado</option>
+        </select>
+      </div>
+
+      <div class="section-sep">Notas</div>
+
+      <div class="field full">
+        <label>Observaciones / notas internas</label>
+        <textarea id="f-notas" placeholder="Medidas especiales, aclaraciones, seguimiento..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-danger" id="btn-delete" onclick="deleteVenta()" style="display:none">Eliminar</button>
+      <button class="btn btn-primary" onclick="saveVenta()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL DETALLE -->
+<div class="modal-overlay" id="modal-detail">
+  <div class="modal">
+    <div class="modal-title">
+      <span id="detail-title">Detalle de venta</span>
+      <button class="close-btn" onclick="closeDetail()">×</button>
+    </div>
+    <div id="detail-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeDetail()">Cerrar</button>
+      <button class="btn btn-ghost" id="detail-remito-btn" style="border-color:var(--accent);color:var(--accent)">🧾 Remito</button>
+      <button class="btn btn-primary" id="detail-edit-btn">Editar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwXp1ZYazjijNaszRhF7QCkmPYrn_EYDIgwpS0LPcmBIwTQTGBxCooUajxKiNgJIw2cbw/exec";
+
+async function syncToSheets(v, accion) {
+  const indicator = document.getElementById('sync-indicator');
+  indicator.textContent = '⏳ Sincronizando...';
+  indicator.style.color = 'var(--muted)';
+  try {
+    const payload = {
+      id: v.id,
+      negocio: v.negocio,
+      canal: v.canal,
+      cliente: v.cliente,
+      contacto: v.contacto,
+      modalidad: v.modalidad || '',
+      direccion: v.direccion || '',
+      localidad: v.localidad || '',
+      entreCalles: v.entreCalles || '',
+      producto: v.producto,
+      monto: accion === 'cancelada' ? 0 : v.monto,
+      sena: accion === 'cancelada' ? 0 : v.sena,
+      saldo: accion === 'cancelada' ? 0 : (Number(v.monto)||0)-(Number(v.sena)||0),
+      formaPago: v.formaPago,
+      estadoPago: accion === 'cancelada' ? 'CANCELADA' : v.estadoPago,
+      fechaCompra: v.fechaCompra,
+      fechaEntregaEst: v.fechaEntregaEst,
+      fechaEntregaReal: v.fechaEntregaReal,
+      estadoEntrega: accion === 'cancelada' ? 'CANCELADA' : v.estadoEntrega,
+      notas: accion === 'cancelada' ? '⚠ CANCELADA — ' + new Date().toLocaleDateString('es-AR') + (v.notas ? ' | ' + v.notas : '') : v.notas,
+      accion: accion,
+      numeroVenta: v.numeroVenta || '',
+      vendedor: v.vendedor || '',
+      facturacion: v.facturacion || 'sin-factura',
+      tipo: 'venta'
+    };
+    const resp = await fetch(SCRIPT_URL, { method: "POST", body: JSON.stringify(payload) });
+    const json = await resp.json();
+    if (json.status === 'ok') {
+      if (accion !== 'cancelada' && !syncedIds.includes(v.id)) {
+        syncedIds.push(v.id);
+        saveSync();
+      }
+      indicator.textContent = accion === 'cancelada' ? '✓ Marcada como cancelada en Sheets' : '✓ Guardado en Sheets';
+      indicator.style.color = 'var(--success)';
+      renderPendienteBadge();
+    } else {
+      throw new Error('resp error');
+    }
+  } catch(err) {
+    indicator.textContent = '⚠ Solo guardado local';
+    indicator.style.color = 'var(--warning)';
+  }
+  setTimeout(() => { indicator.textContent = ''; }, 4000);
+}
+
+let ventas = JSON.parse(localStorage.getItem('alumexpress-ventas') || '[]');
+let syncedIds = JSON.parse(localStorage.getItem('alumexpress-synced') || '[]');
+
+function saveSync() {
+  localStorage.setItem('alumexpress-synced', JSON.stringify(syncedIds));
+}
+
+function getPendientes() {
+  return ventas.filter(v => !syncedIds.includes(v.id));
+}
+let editingId = null;
+let pendingNumeroVenta = null;
+let currentFilter = 'todos';
+let currentPeriodo = 'todo';
+let ventaItems = [];
+
+function renderItemsList() {
+  const el = document.getElementById('items-list');
+  if (!el) return;
+  if (!ventaItems.length) { el.innerHTML = ''; return; }
+  const TIPOS = {corrediza:'Corrediza 2H',corrediza3:'Corrediza 3H',oscilobatiente:'Abrir/Oscilo',banderola:'Banderola',brazo:'Proyectante',pano:'Paño fijo'};
+  el.innerHTML = ventaItems.map((it,i)=>`
+    <div style="background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px">
+      <div>
+        <strong>${it.cantidad}x</strong> ${TIPOS[it.tipo]||it.tipo} — ${it.linea==='a30'?'A30':'Módena'} ${it.color}
+        <span style="color:var(--muted)"> · ${it.ancho}×${it.alto}mm · ${it.vidrio.toUpperCase()}${it.opc&&it.opc.length?' · '+it.opc.join(', '):''}</span>
+      </div>
+      <button type="button" onclick="removeItem(${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0">✕</button>
+    </div>`).join('');
+}
+
+function toggleAddItem() {
+  const f = document.getElementById('add-item-form');
+  const btn = document.getElementById('btn-add-item');
+  if (f.style.display === 'none') {
+    f.style.display = 'block';
+    btn.style.display = 'none';
+  } else {
+    cancelAddItem();
+  }
+}
+
+function cancelAddItem() {
+  const f = document.getElementById('add-item-form');
+  const btn = document.getElementById('btn-add-item');
+  if (f) f.style.display = 'none';
+  if (btn) btn.style.display = 'block';
+}
+
+function addItemToList() {
+  const ancho = Number(document.getElementById('ni-ancho').value);
+  const alto = Number(document.getElementById('ni-alto').value);
+  if (!ancho || !alto) { alert('Ingresá ancho y alto'); return; }
+  const opc = [];
+  if (document.getElementById('ni-premarco').checked) opc.push('premarco');
+  if (document.getElementById('ni-contramarco').checked) opc.push('contramarco');
+  if (document.getElementById('ni-mosquitero').checked) opc.push('mosquitero');
+  ventaItems.push({
+    custom: true,
+    linea: document.getElementById('ni-linea').value,
+    color: document.getElementById('ni-color').value,
+    tipo: document.getElementById('ni-tipo').value,
+    ancho, alto,
+    vidrio: document.getElementById('ni-vidrio').value,
+    cantidad: Number(document.getElementById('ni-cant').value) || 1,
+    opc
+  });
+  document.getElementById('ni-ancho').value = '';
+  document.getElementById('ni-alto').value = '';
+  document.getElementById('ni-cant').value = '1';
+  cancelAddItem();
+  renderItemsList();
+}
+
+function removeItem(i) {
+  ventaItems.splice(i, 1);
+  renderItemsList();
+}
+
+function save() {
+  localStorage.setItem('alumexpress-ventas', JSON.stringify(ventas));
+}
+
+function genId() {
+  return 'V' + Date.now();
+}
+
+async function genNumeroVenta() {
+  try {
+    const resp = await fetch(SCRIPT_URL);
+    const json = await resp.json();
+    if (json.orden) return json.orden;
+  } catch(e) {}
+  return 'V-' + String(ventas.length + 1).padStart(4, '0');
+}
+
+
+
+function calcEstadoPago() {
+  const monto = Number(document.getElementById('f-monto').value) || 0;
+  const sena = Number(document.getElementById('f-sena').value) || 0;
+  const sel = document.getElementById('f-estado-pago');
+  if (sena === 0) sel.value = 'Pendiente';
+  else if (sena >= monto && monto > 0) sel.value = 'Pagado';
+  else sel.value = 'Parcial';
+}
+
+function formatMoney(n) {
+  if (!n) return '—';
+  return '$' + Number(n).toLocaleString('es-AR');
+}
+
+function formatDate(d) {
+  if (!d) return '—';
+  const [y, m, day] = d.split('-');
+  return `${day}/${m}/${y}`;
+}
+
+const canalClass = {
+  'MercadoLibre': 'canal-ml',
+  'Tienda Nube': 'canal-tn',
+  'WhatsApp / Directo': 'canal-wp',
+  'Showroom / Local': 'canal-sh',
+  'Constructoras': 'canal-co',
+};
+
+function renderPendienteBadge() {
+  const count = getPendientes().length;
+  const badge = document.getElementById('badge-pendientes');
+  const btn = document.getElementById('btn-sync-pendientes');
+  if (badge) badge.textContent = count > 0 ? count : '';
+  if (btn) btn.style.display = count > 0 ? 'flex' : 'none';
+}
+
+async function syncPendientes() {
+  const pendientes = getPendientes();
+  if (!pendientes.length) return;
+  const btn = document.getElementById('btn-sync-pendientes');
+  const indicator = document.getElementById('sync-indicator');
+  btn.disabled = true;
+  indicator.textContent = '⏳ Subiendo ' + pendientes.length + ' venta(s)...';
+  indicator.style.color = 'var(--muted)';
+  let ok = 0;
+  let fail = 0;
+  for (const v of pendientes) {
+    try {
+      const payload = {
+        id: v.id, negocio: v.negocio, canal: v.canal, cliente: v.cliente,
+        contacto: v.contacto,
+        modalidad: v.modalidad || '',
+        direccion: v.direccion || '',
+        localidad: v.localidad || '',
+        entreCalles: v.entreCalles || '',
+      modalidad: v.modalidad || '',
+      direccion: v.direccion || '',
+      localidad: v.localidad || '',
+      entreCalles: v.entreCalles || '', producto: v.producto, monto: v.monto, sena: v.sena,
+        saldo: (Number(v.monto)||0)-(Number(v.sena)||0), formaPago: v.formaPago,
+        estadoPago: v.estadoPago, fechaCompra: v.fechaCompra,
+        fechaEntregaEst: v.fechaEntregaEst, fechaEntregaReal: v.fechaEntregaReal,
+        estadoEntrega: v.estadoEntrega, notas: v.notas, accion: 'nueva'
+      };
+      const resp = await fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify(payload) });
+      const json = await resp.json();
+      if (json.status === 'ok') {
+        syncedIds.push(v.id);
+        ok++;
+      } else { fail++; }
+    } catch { fail++; }
+  }
+  saveSync();
+  renderPendienteBadge();
+  btn.disabled = false;
+  if (fail === 0) {
+    indicator.textContent = '✓ ' + ok + ' venta(s) sincronizadas!';
+    indicator.style.color = 'var(--success)';
+  } else {
+    indicator.textContent = '⚠ ' + ok + ' ok, ' + fail + ' fallaron. Revisá internet.';
+    indicator.style.color = 'var(--warning)';
+  }
+  setTimeout(() => { indicator.textContent = ''; }, 5000);
+}
+
+function renderStats() {
+  const filtered = getFiltered();
+  const total = filtered.length;
+  const totalMonto = filtered.reduce((a,v) => a + (Number(v.monto)||0), 0);
+  const cobrado = filtered.filter(v => v.estadoPago === 'Pagado').reduce((a,v) => a + (Number(v.monto)||0), 0);
+  const pendienteMonto = filtered.filter(v => v.estadoPago !== 'Pagado').reduce((a,v) => {
+    const saldo = (Number(v.monto)||0) - (Number(v.sena)||0);
+    return a + saldo;
+  }, 0);
+  const sinEntregar = filtered.filter(v => v.estadoEntrega !== 'Entregado').length;
+
+  // Desglose por forma de pago (monto total por cada forma)
+  const formas = ['Efectivo','Transferencia','3 cuotas','3 cuotas Galicia (promo)','6 cuotas','12 cuotas','MercadoPago','Cheque'];
+  const desglose = {};
+  formas.forEach(f => {
+    desglose[f] = filtered.filter(v => v.formaPago === f).reduce((a,v) => a + (Number(v.monto)||0), 0);
+  });
+
+  const desgloseHTML = formas
+    .filter(f => desglose[f] > 0)
+    .map(f => `<div class="stat"><div class="stat-label">${f}</div><div class="stat-value" style="font-size:16px;color:var(--accent2)">${formatMoney(desglose[f])}</div></div>`)
+    .join('');
+
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="stat-label">Total ventas</div><div class="stat-value blue">${total}</div></div>
+    <div class="stat"><div class="stat-label">Facturado</div><div class="stat-value yellow">${formatMoney(totalMonto)}</div></div>
+    <div class="stat"><div class="stat-label">Cobrado</div><div class="stat-value green">${formatMoney(cobrado)}</div></div>
+    <div class="stat"><div class="stat-label">Saldo pendiente</div><div class="stat-value red">${formatMoney(pendienteMonto)}</div></div>
+    <div class="stat"><div class="stat-label">Sin entregar</div><div class="stat-value ${sinEntregar > 0 ? 'red' : 'green'}">${sinEntregar}</div></div>
+    <div style="grid-column:1/-1;border-top:1px solid var(--border);padding-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+      ${desgloseHTML || '<div style="color:var(--muted);font-size:13px;padding:8px 0">Sin ventas registradas</div>'}
+    </div>
+  `;
+}
+
+function getFiltered() {
+  const search = (document.getElementById('search')?.value || '').toLowerCase();
+  const now = new Date();
+  const hoy = now.toISOString().slice(0,10);
+  const lunesStr = (() => {
+    const d = new Date(now);
+    const day = d.getDay() || 7;
+    d.setDate(d.getDate() - day + 1);
+    return d.toISOString().slice(0,10);
+  })();
+  const mesStr = now.toISOString().slice(0,7);
+  const anioStr = now.getFullYear().toString();
+
+  return ventas.filter(v => {
+    const matchFilter =
+      currentFilter === 'todos' ||
+      (currentFilter === 'pagado' && v.estadoPago === 'Pagado') ||
+      (currentFilter === 'pendiente' && v.estadoPago === 'Pendiente') ||
+      (currentFilter === 'no-entregado' && v.estadoEntrega !== 'Entregado') ||
+      (currentFilter === 'entregado' && v.estadoEntrega === 'Entregado');
+    const matchSearch = !search || 
+      (v.cliente||'').toLowerCase().includes(search) ||
+      (v.producto||'').toLowerCase().includes(search) ||
+      (v.contacto||'').toLowerCase().includes(search);
+    const fecha = v.fechaCompra || '';
+    const matchPeriodo =
+      currentPeriodo === 'todo' ||
+      (currentPeriodo === 'hoy' && fecha === hoy) ||
+      (currentPeriodo === 'semana' && fecha >= lunesStr && fecha <= hoy) ||
+      (currentPeriodo === 'mes' && fecha.startsWith(mesStr)) ||
+      (currentPeriodo === 'anio' && fecha.startsWith(anioStr)) ||
+      (currentPeriodo.length === 7 && fecha.startsWith(currentPeriodo));
+    return matchFilter && matchSearch && matchPeriodo;
+  });
+}
+
+function setPeriodo(p, btn) {
+  currentPeriodo = p;
+  document.querySelectorAll('.filters:nth-of-type(2) .filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  document.getElementById('filter-mes-custom').value = '';
+  renderTable();
+  renderStats();
+}
+
+function setPeriodoCustom(val) {
+  if (!val) return;
+  currentPeriodo = val;
+  document.querySelectorAll('.filters:nth-of-type(2) .filter-btn').forEach(b => b.classList.remove('active'));
+  renderTable();
+  renderStats();
+}
+
+function renderTable() {
+  const filtered = getFiltered();
+  const tbody = document.getElementById('tbody');
+  const empty = document.getElementById('empty-state');
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = filtered.slice().reverse().map(v => {
+    const saldo = (Number(v.monto)||0) - (Number(v.sena)||0);
+    const pagoClass = v.estadoPago === 'Pagado' ? 'badge-pagado' : v.estadoPago === 'Parcial' ? 'badge-parcial' : 'badge-pendiente';
+    const entregaClass = v.estadoEntrega === 'Entregado' ? 'badge-entregado' : v.estadoEntrega === 'En proceso' ? 'badge-en-proceso' : 'badge-no-entregado';
+    const cc = canalClass[v.canal] || 'canal-wp';
+    return `<tr onclick="openDetail('${v.id}')">
+      <td class="td-mono" style="color:var(--muted)">${v.numeroVenta || '—'}</td>
+      <td><strong>${v.cliente || '—'}</strong><br><span style="color:var(--muted);font-size:11px">${v.negocio}</span></td>
+      <td class="col-hide" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.producto || '—'}</td>
+      <td class="col-hide"><span class="canal-dot ${cc}">${v.canal}</span></td>
+      <td class="td-mono">${formatMoney(v.monto)}<br><span style="color:var(--muted);font-size:11px">Saldo: ${formatMoney(saldo)}</span></td>
+      <td class="col-hide">${formatDate(v.fechaCompra)}</td>
+      <td>${formatDate(v.fechaEntregaEst)}<br><span class="badge ${entregaClass}">${v.estadoEntrega}</span></td>
+      <td><span class="badge ${pagoClass}">${v.estadoPago}</span></td>
+      <td style="text-align:right;padding-right:12px;white-space:nowrap">
+        <button onclick="event.stopPropagation(); generarRemito('${v.id}')" style="background:none;border:none;font-size:15px;cursor:pointer;margin-right:4px" title="Remito">🧾</button>
+        <button onclick="event.stopPropagation(); openModal('${v.id}')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer" title="Editar">✎</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function setFilter(f, btn) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderTable();
+}
+
+function setTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-ventas').style.display = name === 'ventas' ? '' : 'none';
+  document.getElementById('tab-presupuestos').style.display = name === 'presupuestos' ? '' : 'none';
+  document.getElementById('tab-dashboard').style.display = name === 'dashboard' ? '' : 'none';
+  document.getElementById('tab-pagos').style.display = name === 'pagos' ? '' : 'none';
+  if (name === 'dashboard') renderDashboard();
+  if (name === 'presupuestos') showPresSubtab('interno');
+  if (name === 'pagos') renderPagos();
+}
+
+const COTIZADOR_URL = ""; // Alumexpress no tiene cotizador web
+const COTIZADOR_INTERNO_URL = "https://script.google.com/macros/s/AKfycbxp1QZy1bNF-ksU_emGXs9fwh_kEiKckfQpy2LOk-EBFC6GaFVjimYhVLA3F1LszErC/exec";
+
+async function loadPresupuestos() {
+  const loading = document.getElementById('pres-loading');
+  const list = document.getElementById('pres-list');
+  loading.style.display = 'block';
+  list.innerHTML = '';
+  try {
+    const resp = await fetch(COTIZADOR_URL + '?accion=presupuestos');
+    const rows = await resp.json();
+    loading.style.display = 'none';
+    if (!rows.length) {
+      list.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:13px;">No hay presupuestos todavía</div>';
+      return;
+    }
+    const sorted = [...rows].reverse();
+    list.innerHTML = sorted.map((p, i) => {
+      const nombre = [p.nombre, p.apellido].filter(x => x && x !== '-').join(' ') || '—';
+      const celular = p.celular || '—';
+      const detalle = p.detalle || '—';
+      const total = p.total || '—';
+      const fecha = p._n_orden ? new Date(p._n_orden).toLocaleDateString('es-AR') : '';
+      const orden = p.fecha || p._n_orden || p.orden || p.n || '';
+      return `<div class="table-wrap" style="margin-bottom:14px; padding:16px 20px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:0;">
+            <div style="font-weight:700; font-size:14px; color:var(--text); margin-bottom:4px;">${nombre}</div>
+            <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">📞 ${celular} &nbsp;·&nbsp; ${fecha} &nbsp;·&nbsp; ${orden ? '#'+orden : ''}</div>
+            <div style="font-size:13px; color:var(--text); white-space:pre-wrap; word-break:break-word;">${detalle}</div>
+          </div>
+          <div style="text-align:right; flex-shrink:0;">
+            <div style="font-size:18px; font-weight:800; color:var(--success); margin-bottom:10px;">${total}</div>
+            <button class="btn btn-primary" style="font-size:11px; padding:8px 14px; letter-spacing:1px;" onclick='convertirPresupuesto(${JSON.stringify({nombre, celular, detalle, total, orden})})'>Convertir →</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    loading.style.display = 'none';
+    list.innerHTML = '<div style="text-align:center;padding:32px;color:var(--danger);font-size:13px;">Error al cargar. Revisá la conexión o intentá de nuevo.</div>';
+  }
+}
+
+function convertirPresupuesto(p) {
+  const monto = Number(String(p.total).replace(/[^0-9]/g, '')) || 0;
+  pendingNumeroVenta = p.orden || null;
+  openModal();
+  document.getElementById('f-cliente').value = p.nombre || '';
+  document.getElementById('f-contacto').value = p.celular || '';
+  document.getElementById('f-canal').value = 'Cotizador Web';
+  document.getElementById('f-producto').value = p.detalle || '';
+  document.getElementById('f-monto').value = monto || '';
+  document.getElementById('f-sena').value = '';
+  document.getElementById('f-notas').value = p.orden ? 'Cotizador Web - Presupuesto #' + p.orden : 'Cotizador Web';
+}
+
+function showPresSubtab(which) {
+  const isWeb = which === 'web';
+  document.getElementById('pres-subtab-web').style.display = isWeb ? '' : 'none';
+  document.getElementById('pres-subtab-interno').style.display = isWeb ? 'none' : '';
+  const btnWeb = document.getElementById('pres-subtab-web-btn');
+  const btnInt = document.getElementById('pres-subtab-interno-btn');
+  btnWeb.style.borderBottomColor = isWeb ? 'var(--accent2)' : 'transparent';
+  btnWeb.style.color = isWeb ? 'var(--accent2)' : 'var(--muted)';
+  btnInt.style.borderBottomColor = isWeb ? 'transparent' : 'var(--accent2)';
+  btnInt.style.color = isWeb ? 'var(--muted)' : 'var(--accent2)';
+  if (isWeb) loadPresupuestos(); else loadPresupuestosInterno();
+}
+
+async function loadPresupuestosInterno() {
+  const loading = document.getElementById('pres-interno-loading');
+  const list = document.getElementById('pres-interno-list');
+  loading.style.display = 'block';
+  list.innerHTML = '';
+  try {
+    const resp = await fetch(COTIZADOR_INTERNO_URL + '?action=presupuestos');
+    const rows = await resp.json();
+    loading.style.display = 'none';
+    if (!rows.length) {
+      list.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:13px;">No hay presupuestos todavía</div>';
+      return;
+    }
+    const sorted = [...rows].reverse();
+    list.innerHTML = sorted.map((p) => {
+      const nombre = p.nombre || '—';
+      const celular = p.celular || '—';
+      const detalle = p.detalle || '—';
+      const total = p.total || '—';
+      const orden = p.orden || '';
+      const fecha = p.fecha || '';
+      return `<div class="table-wrap" style="margin-bottom:14px; padding:16px 20px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:0;">
+            <div style="font-weight:700; font-size:14px; color:var(--text); margin-bottom:4px;">${nombre}</div>
+            <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">📞 ${celular} &nbsp;·&nbsp; ${fecha} &nbsp;·&nbsp; ${orden ? orden : ''}</div>
+            <div style="font-size:13px; color:var(--text); white-space:pre-wrap; word-break:break-word;">${detalle}</div>
+          </div>
+          <div style="text-align:right; flex-shrink:0;">
+            <div style="font-size:18px; font-weight:800; color:var(--success); margin-bottom:10px;">${total}</div>
+            <button class="btn btn-primary" style="font-size:11px; padding:8px 14px; letter-spacing:1px;" onclick='convertirPresupuestoInterno(${JSON.stringify({nombre, celular, detalle, total, orden})})'>Convertir →</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    loading.style.display = 'none';
+    list.innerHTML = '<div style="text-align:center;padding:32px;color:var(--danger);font-size:13px;">Error al cargar. Revisá la conexión o intentá de nuevo.</div>';
+  }
+}
+
+function convertirPresupuestoInterno(p) {
+  const monto = Number(String(p.total).replace(/[^0-9]/g, '')) || 0;
+  pendingNumeroVenta = p.orden || null;
+  openModal();
+  document.getElementById('f-cliente').value = p.nombre || '';
+  document.getElementById('f-contacto').value = p.celular || '';
+  document.getElementById('f-canal').value = 'Cotizador Interno';
+  document.getElementById('f-producto').value = p.detalle || '';
+  document.getElementById('f-monto').value = monto || '';
+  document.getElementById('f-sena').value = '';
+  document.getElementById('f-notas').value = p.orden ? 'Cotizador Interno - Presupuesto ' + p.orden : 'Cotizador Interno';
+}
+
+function renderDashboard() {
+  // Canal chart
+  const canales = {};
+  ventas.forEach(v => { canales[v.canal] = (canales[v.canal]||0) + 1; });
+  const maxC = Math.max(...Object.values(canales), 1);
+  document.getElementById('chart-canal').innerHTML = Object.entries(canales).map(([k,val]) => `
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+        <span>${k}</span><span style="color:var(--muted)">${val}</span>
+      </div>
+      <div style="background:var(--surface2);border-radius:4px;height:8px">
+        <div style="background:var(--accent2);width:${(val/maxC*100).toFixed(0)}%;height:8px;border-radius:4px;transition:width .4s"></div>
+      </div>
+    </div>`).join('') || '<span style="color:var(--muted);font-size:13px">Sin datos</span>';
+
+  // Pago chart
+  const pagos = { Pagado: 0, Parcial: 0, Pendiente: 0 };
+  ventas.forEach(v => { pagos[v.estadoPago] = (pagos[v.estadoPago]||0) + 1; });
+  const colors = { Pagado: 'var(--success)', Parcial: 'var(--accent2)', Pendiente: 'var(--warning)' };
+  const maxP = Math.max(...Object.values(pagos), 1);
+  document.getElementById('chart-pago').innerHTML = Object.entries(pagos).map(([k,val]) => `
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+        <span>${k}</span><span style="color:var(--muted)">${val}</span>
+      </div>
+      <div style="background:var(--surface2);border-radius:4px;height:8px">
+        <div style="background:${colors[k]};width:${(val/maxP*100).toFixed(0)}%;height:8px;border-radius:4px"></div>
+      </div>
+    </div>`).join('') || '<span style="color:var(--muted);font-size:13px">Sin datos</span>';
+
+  // Recientes
+  const rec = ventas.slice().reverse().slice(0,5);
+  document.getElementById('chart-recientes').innerHTML = rec.length ? rec.map(v => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div><strong style="font-size:13px">${v.cliente||'—'}</strong><br><span style="font-size:11px;color:var(--muted)">${v.producto||'—'}</span></div>
+      <div style="text-align:right"><span style="font-family:'DM Mono',monospace;font-size:13px">${formatMoney(v.monto)}</span><br>
+      <span class="badge badge-${v.estadoPago.toLowerCase()}" style="font-size:10px">${v.estadoPago}</span></div>
+    </div>`).join('') : '<span style="color:var(--muted);font-size:13px">Sin datos</span>';
+}
+
+function openModal(id) {
+  editingId = id || null;
+  document.getElementById('modal-title-text').textContent = id ? 'Editar venta' : 'Nueva venta';
+  document.getElementById('btn-delete').style.display = id ? '' : 'none';
+
+  if (id) {
+    const v = ventas.find(x => x.id === id);
+    if (!v) return;
+    document.getElementById('f-negocio').value = v.negocio || 'Alumexpress';
+    document.getElementById('f-vendedor').value = v.vendedor || 'Milagros';
+    document.getElementById('f-canal').value = v.canal;
+    document.getElementById('f-cliente').value = v.cliente;
+    document.getElementById('f-contacto').value = v.contacto;
+    document.getElementById('f-modalidad').value = v.modalidad || 'Envío a domicilio';
+    document.getElementById('f-direccion').value = v.direccion || '';
+    document.getElementById('f-localidad').value = v.localidad || '';
+    document.getElementById('f-producto').value = v.producto;
+    document.getElementById('f-monto').value = v.monto;
+    document.getElementById('f-sena').value = v.sena;
+    document.getElementById('f-forma-pago').value = v.formaPago;
+    document.getElementById('f-estado-pago').value = v.estadoPago;
+    document.getElementById('f-facturacion').value = v.facturacion || 'sin-factura';
+    document.getElementById('f-fecha-compra').value = v.fechaCompra;
+    document.getElementById('f-fecha-entrega-est').value = v.fechaEntregaEst;
+    document.getElementById('f-fecha-entrega-real').value = v.fechaEntregaReal;
+    document.getElementById('f-estado-entrega').value = v.estadoEntrega;
+    document.getElementById('f-notas').value = v.notas;
+    document.getElementById('field-entrega-real').style.display = '';
+    ventaItems = (v.items || []).map(x => ({...x}));
+    renderItemsList();
+    cancelAddItem();
+  } else {
+    document.getElementById('f-negocio').value = 'Alumexpress';
+    document.getElementById('f-vendedor').value = 'Milagros';
+    document.getElementById('f-canal').value = 'WhatsApp / Directo';
+    document.getElementById('f-cliente').value = '';
+    document.getElementById('f-contacto').value = '';
+    document.getElementById('f-modalidad').value = 'Envío a domicilio';
+    document.getElementById('f-direccion').value = '';
+    document.getElementById('f-localidad').value = '';
+    document.getElementById('f-producto').value = '';
+    document.getElementById('f-monto').value = '';
+    document.getElementById('f-sena').value = '';
+    document.getElementById('f-forma-pago').value = 'Efectivo';
+    document.getElementById('f-estado-pago').value = 'Pendiente';
+    document.getElementById('f-facturacion').value = 'sin-factura';
+    document.getElementById('f-fecha-compra').value = new Date().toISOString().slice(0,10);
+    document.getElementById('f-fecha-entrega-est').value = '';
+    document.getElementById('f-fecha-entrega-real').value = '';
+    document.getElementById('f-estado-entrega').value = 'No entregado';
+    document.getElementById('f-notas').value = '';
+    document.getElementById('field-entrega-real').style.display = 'none';
+    ventaItems = [];
+    renderItemsList();
+    cancelAddItem();
+  }
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeModal() {
+  pendingNumeroVenta = null;
+  document.getElementById('modal').classList.remove('open');
+}
+
+async function saveVenta() {
+  const numeroVenta = editingId
+    ? ventas.find(x=>x.id===editingId)?.numeroVenta
+    : (pendingNumeroVenta || await genNumeroVenta());
+  pendingNumeroVenta = null;
+  const v = {
+    id: editingId || genId(),
+    numeroVenta: numeroVenta || (14100 + ventas.length),
+    negocio: document.getElementById('f-negocio').value,
+    vendedor: document.getElementById('f-vendedor').value,
+    canal: document.getElementById('f-canal').value,
+    cliente: document.getElementById('f-cliente').value,
+    contacto: document.getElementById('f-contacto').value,
+    modalidad: document.getElementById('f-modalidad').value,
+    direccion: document.getElementById('f-direccion').value,
+    localidad: document.getElementById('f-localidad').value,
+    producto: document.getElementById('f-producto').value,
+    monto: document.getElementById('f-monto').value,
+    sena: document.getElementById('f-sena').value,
+    formaPago: document.getElementById('f-forma-pago').value,
+    estadoPago: document.getElementById('f-estado-pago').value,
+    facturacion: document.getElementById('f-facturacion').value,
+    fechaCompra: document.getElementById('f-fecha-compra').value,
+    fechaEntregaEst: document.getElementById('f-fecha-entrega-est').value,
+    fechaEntregaReal: document.getElementById('f-fecha-entrega-real').value,
+    estadoEntrega: document.getElementById('f-estado-entrega').value,
+    notas: document.getElementById('f-notas').value,
+  };
+  if (ventaItems.length) v.items = ventaItems;
+  const isNew = !editingId;
+  closeModal();
+  const indicator = document.getElementById('sync-indicator');
+  indicator.textContent = '⏳ Guardando...';
+  indicator.style.color = 'var(--muted)';
+  
+  // Guardar en Firebase (si disponible) y localmente
+  if (window.fbSave) {
+    window.fbSave(v, isNew).then(ok => {
+      if (ok) {
+        indicator.textContent = '✓ Guardado';
+        indicator.style.color = 'var(--success)';
+      } else {
+        indicator.textContent = '⚠ Error al guardar';
+        indicator.style.color = 'var(--danger)';
+      }
+      setTimeout(() => { indicator.textContent = ''; }, 3000);
+    });
+  } else {
+    // fallback local
+    if (isNew) { ventas.push(v); } else {
+      const idx = ventas.findIndex(x => x.id === editingId);
+      if(idx>=0) ventas[idx] = v;
+    }
+    save();
+    renderAll();
+  }
+  syncToSheets(v, isNew ? "nueva" : "edicion");
+  // Marcar el presupuesto como vendido en sisPresCache (para que aparezca en app de obra)
+  if(v.numeroVenta && /^B-/.test(String(v.numeroVenta))){
+    try{
+      const cache = JSON.parse(localStorage.getItem('sisPresCache')||'[]');
+      const idx = cache.findIndex(p=>String(p.num)===String(v.numeroVenta));
+      if(idx>=0){ cache[idx].estado = 'vendido'; cache[idx].vendedor = v.vendedor||''; }
+      else { cache.push({num:v.numeroVenta, fecha:v.fechaCompra||new Date().toISOString().slice(0,10), cliente:v.cliente||'', dir:v.direccion||'', localidad:v.localidad||'', items:[], estado:'vendido', vendedor:v.vendedor||''}); }
+      localStorage.setItem('sisPresCache', JSON.stringify(cache));
+    }catch(e){}
+  }
+}
+
+function deleteVenta() {
+  if (!editingId) return;
+  const v = ventas.find(x => x.id === editingId);
+  closeModal();
+  const idToDelete = editingId;
+  ventas = ventas.filter(x => x.id !== idToDelete);
+  save();
+  renderAll();
+  if (window.fbDelete) {
+    window.fbDelete(idToDelete).then(ok => {
+      const indicator = document.getElementById('sync-indicator');
+      indicator.textContent = ok ? '✓ Eliminada' : '⚠ Error al eliminar';
+      indicator.style.color = ok ? 'var(--success)' : 'var(--danger)';
+      setTimeout(() => { indicator.textContent = ''; }, 3000);
+    });
+  }
+  if (v) syncToSheets(v, 'cancelada');
+}
+
+function openDetail(id) {
+  const v = ventas.find(x => x.id === id);
+  if (!v) return;
+  const saldo = (Number(v.monto)||0) - (Number(v.sena)||0);
+  const pagoClass = v.estadoPago === 'Pagado' ? 'badge-pagado' : v.estadoPago === 'Parcial' ? 'badge-parcial' : 'badge-pendiente';
+  const entregaClass = v.estadoEntrega === 'Entregado' ? 'badge-entregado' : v.estadoEntrega === 'En proceso' ? 'badge-en-proceso' : 'badge-no-entregado';
+  
+  document.getElementById('detail-title').textContent = v.cliente || 'Detalle de venta';
+  document.getElementById('detail-body').innerHTML = `
+    <div class="detail-grid">
+      <div class="detail-item"><label>N° Venta</label><div class="val td-mono" style="font-size:18px;color:var(--accent2)">${v.numeroVenta || '—'}</div></div>
+      <div class="detail-item"><label>Negocio</label><div class="val">${v.negocio}</div></div>
+      <div class="detail-item"><label>Canal</label><div class="val">${v.canal}</div></div>
+      <div class="detail-item"><label>Cliente</label><div class="val">${v.cliente||'—'}</div></div>
+      <div class="detail-item"><label>Celular / Contacto</label><div class="val">${v.contacto||'—'}</div></div>
+      <div class="detail-item"><label>Modalidad</label><div class="val">${v.modalidad||'—'}</div></div>
+      <div class="detail-item full"><label>Dirección</label><div class="val">${v.direccion||'—'}${v.localidad ? ' — ' + v.localidad : ''}${v.entreCalles ? ' (entre ' + v.entreCalles + ')' : ''}</div></div>
+      <div class="detail-item full"><label>Producto</label><div class="val">${v.producto||'—'}</div></div>
+      <div class="detail-item"><label>Monto total</label><div class="val" style="font-family:'DM Mono',monospace;font-size:18px;color:var(--accent)">${formatMoney(v.monto)}</div></div>
+      <div class="detail-item"><label>Seña</label><div class="val td-mono">${formatMoney(v.sena)}</div></div>
+      <div class="detail-item"><label>Saldo pendiente</label><div class="val td-mono" style="color:var(--danger)">${formatMoney(saldo)}</div></div>
+      <div class="detail-item"><label>Forma de pago</label><div class="val">${v.formaPago}</div></div>
+      <div class="detail-item"><label>Estado de pago</label><div class="val"><span class="badge ${pagoClass}">${v.estadoPago}</span></div></div>
+      <div class="detail-item"><label>Fecha de compra</label><div class="val">${formatDate(v.fechaCompra)}</div></div>
+      <div class="detail-item"><label>Entrega estimada</label><div class="val">${formatDate(v.fechaEntregaEst)}</div></div>
+      <div class="detail-item"><label>Entrega real</label><div class="val">${formatDate(v.fechaEntregaReal)}</div></div>
+      <div class="detail-item"><label>Estado de entrega</label><div class="val"><span class="badge ${entregaClass}">${v.estadoEntrega}</span></div></div>
+      ${v.notas ? `<div class="detail-item full"><label>Notas</label><div class="nota-box">${v.notas}</div></div>` : ''}
+    </div>`;
+  
+  document.getElementById('detail-edit-btn').onclick = () => {
+    closeDetail();
+    openModal(id);
+  };
+  document.getElementById('detail-remito-btn').onclick = () => {
+    closeDetail();
+    generarRemito(id);
+  };
+  document.getElementById('modal-detail').classList.add('open');
+}
+
+function closeDetail() {
+  document.getElementById('modal-detail').classList.remove('open');
+}
+
+function exportCSV() {
+  if (!ventas.length) { alert('No hay ventas para exportar'); return; }
+  const cols = ['ID','Negocio','Canal','Cliente','Contacto','Producto','Monto','Seña','Saldo','Forma de pago','Estado pago','Fecha compra','Entrega estimada','Entrega real','Estado entrega','Notas'];
+  const rows = ventas.map(v => [
+    v.id, v.negocio, v.canal, v.cliente, v.contacto, v.producto,
+    v.monto, v.sena, (Number(v.monto)||0)-(Number(v.sena)||0),
+    v.formaPago, v.estadoPago,
+    v.fechaCompra, v.fechaEntregaEst, v.fechaEntregaReal, v.estadoEntrega,
+    '"'+(v.notas||'').replace(/"/g,"'")+'"'
+  ]);
+  const csv = [cols.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csv);
+  a.download = 'alumexpress-ventas-' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
+
+
+
+function renderAll() {
+  renderStats();
+  renderTable();
+  renderPendienteBadge();
+}
+
+renderAll();
+
+// ── PAGOS ──────────────────────────────────────────────
+let pagos = []; // ahora vienen de Firebase (compartidos); se arranca de cero
+let _filtroPago = 'todos';
+
+const QUIEN_DEFAULTS = {
+  proveedor: ['Fasglass', 'Vglass', 'Hierromas', 'Alfa Metal', 'Gromanti', 'Pavir', 'Aluminio Urbano', 'Perfiles del Pilar', 'Grupo Roller', 'Fare Accesorios'],
+  sueldo:    ['Matías', 'Milagros', 'Walter', 'Orlando', 'Jony', 'Pancho'],
+  gasto:     ['Alquiler', 'Luz', 'Gas', 'Internet', 'Teléfono', 'Monotributo', 'IIBB ARBA', 'Seguro']
+};
+
+const QUIEN_VER = 'v4';
+function getQuienLists() {
+  try {
+    if (localStorage.getItem('alumexpress_quien_ver') !== QUIEN_VER) return JSON.parse(JSON.stringify(QUIEN_DEFAULTS));
+    return JSON.parse(localStorage.getItem('alumexpress_quien_lists') || 'null') || JSON.parse(JSON.stringify(QUIEN_DEFAULTS));
+  } catch(e) { return JSON.parse(JSON.stringify(QUIEN_DEFAULTS)); }
+}
+function saveQuienLists(lists) {
+  localStorage.setItem('alumexpress_quien_ver', QUIEN_VER);
+  localStorage.setItem('alumexpress_quien_lists', JSON.stringify(lists));
+}
+
+function updateQuienSel() {
+  const tipo = document.getElementById('fp-tipo').value;
+  const sel = document.getElementById('fp-quien-sel');
+  const lists = getQuienLists();
+  const items = lists[tipo] || [];
+  sel.innerHTML = '<option value="">-- Seleccioná --</option>' +
+    items.map(n => `<option value="${n}">${n}</option>`).join('') +
+    '<option value="__otro__">✏️ Otro (escribir)...</option>';
+  sel.value = '';
+  document.getElementById('fp-quien-custom').style.display = 'none';
+}
+
+function onQuienSelChange() {
+  const sel = document.getElementById('fp-quien-sel');
+  const custom = document.getElementById('fp-quien-custom');
+  if (sel.value === '__otro__') {
+    custom.style.display = '';
+    custom.value = '';
+    custom.focus();
+  } else {
+    custom.style.display = 'none';
+  }
+}
+
+function agregarQuien() {
+  const tipo = document.getElementById('fp-tipo').value;
+  const nombre = prompt('Nombre a agregar a la lista:');
+  if (!nombre || !nombre.trim()) return;
+  const lists = getQuienLists();
+  if (!lists[tipo].includes(nombre.trim())) {
+    lists[tipo].push(nombre.trim());
+    saveQuienLists(lists);
+  }
+  updateQuienSel();
+  document.getElementById('fp-quien-sel').value = nombre.trim();
+}
+
+function getQuienValue() {
+  const sel = document.getElementById('fp-quien-sel');
+  if (sel.value === '__otro__' || sel.value === '') {
+    return document.getElementById('fp-quien-custom').value.trim();
+  }
+  return sel.value;
+}
+
+function savePagosLocal() {
+  localStorage.setItem('alumexpress_pagos', JSON.stringify(pagos));
+}
+
+function openModalPago() {
+  document.getElementById('fp-fecha').value = new Date().toISOString().slice(0,10);
+  document.getElementById('fp-tipo').value = 'proveedor';
+  document.getElementById('fp-concepto').value = '';
+  document.getElementById('fp-monto').value = '';
+  document.getElementById('fp-factura').value = 'sin-factura';
+  document.getElementById('fp-forma-pago').value = 'Efectivo';
+  document.getElementById('fp-notas').value = '';
+  updateQuienSel();
+  document.getElementById('modal-pago').classList.add('open');
+}
+
+function closeModalPago() {
+  document.getElementById('modal-pago').classList.remove('open');
+}
+
+async function savePago() {
+  const p = {
+    id: 'pago_' + Date.now(),
+    fecha: document.getElementById('fp-fecha').value,
+    tipo: document.getElementById('fp-tipo').value,
+    quien: getQuienValue(),
+    concepto: document.getElementById('fp-concepto').value,
+    monto: document.getElementById('fp-monto').value,
+    factura: document.getElementById('fp-factura').value,
+    formaPago: document.getElementById('fp-forma-pago').value,
+    notas: document.getElementById('fp-notas').value,
+  };
+  if (!p.quien || !p.monto) { alert('Completá al menos "A quién" y "Monto"'); return; }
+  pagos.unshift(p);
+  savePagosLocal();
+  closeModalPago();
+  renderPagos();
+  if (window.fbSavePago) window.fbSavePago(p);
+  syncPagoToSheets(p);
+}
+
+async function syncPagoToSheets(p) {
+  const tipoLabel = {proveedor:'Proveedor', sueldo:'Sueldo', gasto:'Gasto fijo'}[p.tipo] || p.tipo;
+  const facturaLabel = {
+    'sin-factura':'Sin factura','factura-a':'Factura A','factura-b':'Factura B','factura-c':'Factura C'
+  }[p.factura] || p.factura;
+  try {
+    await fetch(SCRIPT_URL, {
+      method: 'POST',
+      body: JSON.stringify({
+        tipo: 'pago',
+        fecha: p.fecha,
+        tipoPago: tipoLabel,
+        quien: p.quien,
+        concepto: p.concepto,
+        monto: p.monto,
+        factura: facturaLabel,
+        formaPago: p.formaPago,
+        notas: p.notas,
+        id: p.id,
+        accion: 'nuevo'
+      })
+    });
+  } catch(e) { console.warn('Sync pago sheets:', e); }
+}
+
+function filtrarPagos(f, btn) {
+  _filtroPago = f;
+  document.querySelectorAll('#tab-pagos .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderPagos();
+}
+
+function renderPagos() {
+  const fmt = n => '$' + Number(n||0).toLocaleString('es-AR');
+  const tipoLabel = {proveedor:'Proveedor', sueldo:'Sueldo', gasto:'Gasto fijo'};
+  const facturaLabel = {
+    'sin-factura':'Sin factura','factura-a':'Factura A','factura-b':'Factura B','factura-c':'Factura C'
+  };
+
+  const lista = _filtroPago === 'todos' ? pagos : pagos.filter(p => p.tipo === _filtroPago);
+
+  // Stats (solo activos)
+  const activos = lista.filter(p => !p.cancelado);
+  const total = activos.reduce((s,p) => s + (Number(p.monto)||0), 0);
+  document.getElementById('stats-pagos').innerHTML = `
+    <div class="stat-card"><div class="stat-label">Total pagado</div><div class="stat-value red">${fmt(total)}</div></div>
+    <div class="stat-card"><div class="stat-label">Registros</div><div class="stat-value">${activos.length}</div></div>
+  `;
+
+  const tbody = document.getElementById('tabla-pagos');
+  const empty = document.getElementById('pagos-empty');
+  if (!lista.length) { tbody.innerHTML = ''; empty.style.display = ''; return; }
+  empty.style.display = 'none';
+  tbody.innerHTML = lista.map(p => {
+    const canc = p.cancelado;
+    const rowStyle = canc ? 'background:rgba(220,38,38,0.08);opacity:0.7' : '';
+    const textStyle = canc ? 'text-decoration:line-through;color:var(--muted)' : '';
+    return `<tr style="${rowStyle}">
+      <td style="${textStyle}">${p.fecha ? p.fecha.split('-').reverse().join('/') : '—'}</td>
+      <td><span style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--surface2);color:var(--muted);${canc?'text-decoration:line-through':''}">${tipoLabel[p.tipo]||p.tipo}</span></td>
+      <td style="${textStyle}"><strong>${p.quien||'—'}</strong></td>
+      <td style="color:var(--muted);font-size:13px;${canc?'text-decoration:line-through':''}">${p.concepto||'—'}</td>
+      <td style="${textStyle}"><strong style="color:${canc?'var(--muted)':'var(--danger)'}">${fmt(p.monto)}</strong></td>
+      <td style="font-size:12px;color:var(--muted);${canc?'text-decoration:line-through':''}">${facturaLabel[p.factura]||p.factura||'—'}</td>
+      <td style="font-size:12px;${canc?'text-decoration:line-through':''}">${p.formaPago||'—'}</td>
+      <td>${canc
+        ? `<span style="font-size:11px;color:var(--danger);font-weight:600">ANULADO</span>`
+        : `<button onclick="eliminarPago('${p.id}')" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:16px;padding:0 4px" title="Anular pago">×</button>`
+      }</td>
+    </tr>`;
+  }).join('');
+}
+
+function eliminarPago(id) {
+  if (!confirm('¿Anular este pago? Va a quedar marcado en rojo.')) return;
+  const p = pagos.find(x => x.id === id);
+  if (p) { p.cancelado = true; p.fechaCancelado = new Date().toLocaleDateString('es-AR'); }
+  savePagosLocal();
+  renderPagos();
+  if (p && window.fbSavePago) window.fbSavePago(p);
+  if (p) syncAnularPago(p);
+}
+
+// Marca el pago en rojo como ANULADO en el Sheet
+async function syncAnularPago(p) {
+  try {
+    await fetch(SCRIPT_URL, {
+      method: 'POST',
+      body: JSON.stringify({ tipo: 'pago', accion: 'anulado', id: p.id, fecha: p.fecha, quien: p.quien, monto: p.monto })
+    });
+  } catch(e) { console.warn('Anular pago sheets:', e); }
+}
+
+</script>
+
+<!-- REMITO -->
+<div class="remito-overlay" id="remito-overlay">
+  <div class="remito-sheet">
+    <button onclick="document.getElementById('remito-overlay').classList.remove('open')" style="position:absolute;top:12px;right:16px;background:none;border:none;font-size:24px;cursor:pointer;color:#666;line-height:1;z-index:10;">×</button>
+    <div id="remito-body"></div>
+    <div class="remito-actions">
+      <button onclick="document.getElementById('remito-overlay').classList.remove('open')" style="padding:9px 18px;border-radius:8px;border:1px solid #ccc;background:#fff;font-size:13px;cursor:pointer;">Cerrar</button>
+      <button onclick="window.print()" style="padding:9px 20px;border-radius:8px;border:none;background:#111;color:#fff;font-size:13px;font-weight:600;cursor:pointer;">Imprimir / Guardar PDF</button>
+    </div>
+  </div>
+</div>
+
+<div id="pwa-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);padding:14px 20px;z-index:300;align-items:center;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,.4);">
+  <div style="flex:1">
+    <div style="font-weight:600;font-size:14px">Instalar como app</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:2px">Funciona sin internet, queda en tu pantalla de inicio</div>
+  </div>
+  <button onclick="installPWA()" style="background:var(--accent);color:#000;border:none;border-radius:8px;padding:9px 18px;font-family:inherit;font-weight:600;font-size:13px;cursor:pointer;">Instalar</button>
+  <button onclick="document.getElementById('pwa-banner').style.display='none'" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:4px;">×</button>
+</div>
+
+<script>
+// ===== REMITO =====
+function generarRemito(id) {
+  const v = ventas.find(x => x.id === id);
+  if (!v) return;
+  const saldo = (Number(v.monto)||0) - (Number(v.sena)||0);
+  const numRemito = v.numeroVenta || '—';
+  const hoy = new Date().toLocaleDateString('es-AR');
+
+  document.getElementById('remito-body').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:14px;margin-bottom:20px">
+      <div>
+        <div style="font-size:20px;font-weight:700;letter-spacing:.5px">ALUMEXPRESS</div>
+        <div style="font-size:11px;color:#555;margin-top:3px">Pilar Centro · Lunes a viernes de 9 a 17 hs</div>
+        <div style="font-size:11px;color:#555">WhatsApp: 11 7814-2328 | @alumexpresspilar</div>
+        <div style="font-size:11px;color:#555">www.alumexpress.com</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:18px;font-weight:700;text-transform:uppercase">Remito</div>
+        <div style="font-size:12px;color:#555;margin-top:4px">Remito N° ${numRemito}</div>
+        <div style="font-size:11px;color:#888">Venta N° ${v.numeroVenta||'—'}</div>
+        <div style="font-size:12px;color:#555">Fecha: ${hoy}</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;background:#f5f5f5;padding:14px;border-radius:6px">
+      <div>
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Cliente</div>
+        <div style="font-weight:600;font-size:14px">${v.cliente||'—'}</div>
+        ${v.contacto ? '<div style="color:#555;font-size:12px;margin-top:2px">📱 Cel: ' + v.contacto + '</div>' : ''}
+        ${v.modalidad ? '<div style="color:#555;font-size:12px;margin-top:2px">🚚 ' + v.modalidad + '</div>' : ''}
+        ${v.direccion ? '<div style="color:#555;font-size:12px;margin-top:1px">📍 ' + v.direccion + (v.localidad ? ', ' + v.localidad : '') + '</div>' : ''}
+        ${v.entreCalles ? '<div style="color:#555;font-size:12px;margin-top:1px">Entre: ' + v.entreCalles + '</div>' : ''}
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Canal / Negocio</div>
+        <div style="font-size:13px">${v.canal}</div>
+        <div style="font-size:12px;color:#555">${v.negocio}</div>
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Fecha de compra</div>
+        <div style="font-size:13px">${formatDate(v.fechaCompra)}</div>
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#888;margin-bottom:4px">Entrega estimada</div>
+        <div style="font-size:13px">${formatDate(v.fechaEntregaEst)||'A confirmar'}</div>
+      </div>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+      <thead>
+        <tr style="background:#111;color:#fff">
+          <th style="padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.7px">Descripción</th>
+          <th style="padding:10px 12px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:.7px">Precio</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid #e0e0e0">
+          <td style="padding:14px 12px;font-size:13px">${v.producto||'—'}</td>
+          <td style="padding:14px 12px;text-align:right;font-family:monospace;font-size:13px">${formatMoney(v.monto)}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div style="display:flex;justify-content:flex-end;margin-bottom:24px">
+      <div style="width:260px">
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e0e0e0;font-size:13px">
+          <span>Total</span>
+          <span style="font-family:monospace;font-weight:600">${formatMoney(v.monto)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e0e0e0;font-size:13px;color:#555">
+          <span>Anticipo / Seña</span>
+          <span style="font-family:monospace">${formatMoney(v.sena)}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:10px 0;font-size:15px;font-weight:700">
+          <span>Resta pagar</span>
+          <span style="font-family:monospace">${formatMoney(saldo)}</span>
+        </div>
+        <div style="font-size:11px;color:#888;margin-top:4px;text-align:right">Forma de pago: ${v.formaPago}</div>
+      </div>
+    </div>
+
+    ${v.notas ? `<div style="background:#fffbe6;border-left:3px solid #e8c547;padding:10px 14px;border-radius:0 4px 4px 0;font-size:12px;color:#555;margin-bottom:20px"><strong>Notas:</strong> ${v.notas}</div>` : ''}
+
+    <div style="border-top:1px solid #e0e0e0;padding-top:14px;display:flex;justify-content:space-between;align-items:flex-end">
+      <div style="font-size:11px;color:#aaa">Documento no válido como factura</div>
+      <div style="text-align:center">
+        <div style="border-top:1px solid #111;width:160px;padding-top:6px;font-size:11px;color:#555">Firma y aclaración</div>
+      </div>
+    </div>
+  `;
+  document.getElementById('remito-overlay').classList.add('open');
+}
+
+// PWA Manifest generado dinámicamente
+const manifestData = {
+  name: "Alumexpress Ventas",
+  short_name: "Ventas",
+  description: "Control de ventas Alumexpress",
+  start_url: ".",
+  display: "standalone",
+  background_color: "#0f0f11",
+  theme_color: "#0f0f11",
+  orientation: "portrait-primary",
+  icons: [{
+    src: "data:image/svg+xml," + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='24' fill='%230F5C5C'/><text x='96' y='120' font-family='sans-serif' font-size='90' font-weight='bold' fill='%23e8c547' text-anchor='middle'>A</text></svg>`),
+    sizes: "192x192",
+    type: "image/svg+xml",
+    purpose: "any maskable"
+  }]
+};
+const blob = new Blob([JSON.stringify(manifestData)], {type:'application/json'});
+const manifestURL = URL.createObjectURL(blob);
+document.getElementById('pwa-manifest').href = manifestURL;
+
+// Apple touch icon
+const iconSVG = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='22' fill='%230F5C5C'/><text x='90' y='115' font-family='sans-serif' font-size='85' font-weight='bold' fill='%23e8c547' text-anchor='middle'>A</text></svg>`;
+document.getElementById('pwa-icon').href = "data:image/svg+xml," + encodeURIComponent(iconSVG);
+
+// Install prompt
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  const banner = document.getElementById('pwa-banner');
+  banner.style.display = 'flex';
+});
+
+function installPWA() {
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(choice => {
+      deferredPrompt = null;
+      document.getElementById('pwa-banner').style.display = 'none';
+    });
+  } else {
+    // iOS instructions
+    alert('En iPhone:\n1. Tocá el botón compartir (cuadrado con flecha)\n2. Elegí "Agregar a pantalla de inicio"\n3. Tocá "Agregar"\n\nEn Android:\nAbrí el menú del navegador y elegí "Instalar app" o "Agregar a pantalla de inicio"');
+  }
+}
+
+window.addEventListener('appinstalled', () => {
+  document.getElementById('pwa-banner').style.display = 'none';
+});
+</script>
+</body>
+</html>
