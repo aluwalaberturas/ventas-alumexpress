@@ -1438,11 +1438,12 @@ function convertirPresupuestoInterno(p) {
   openModal();
   document.getElementById('f-cliente').value = p.nombre || '';
   document.getElementById('f-contacto').value = p.celular || '';
-  document.getElementById('f-canal').value = 'Cotizador Interno';
+  const _esTN = String(p.orden||'').indexOf('TN-') === 0;
+  document.getElementById('f-canal').value = _esTN ? 'Tienda Nube' : 'Cotizador Interno';
   document.getElementById('f-producto').value = p.detalle || '';
   document.getElementById('f-monto').value = monto || '';
   document.getElementById('f-sena').value = '';
-  document.getElementById('f-notas').value = p.orden ? 'Cotizador Interno - Presupuesto ' + p.orden : 'Cotizador Interno';
+  document.getElementById('f-notas').value = _esTN ? 'Tienda Nube - Pedido ' + p.orden : (p.orden ? 'Cotizador Interno - Presupuesto ' + p.orden : 'Cotizador Interno');
 }
 
 function renderDashboard() {
